@@ -8,7 +8,6 @@ import (
 	"go/build"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -19,55 +18,37 @@ import (
 )
 
 // WritePackageInfo writes a series of package info files to the given file.
-func WritePackageInfo(importPath string, srcRoot, importconfig string, imports map[string]string, installPkgs []string, subrepo, module string, includeTests bool, w io.Writer) error {
+func WritePackageInfo(
+	importPath string,
+	srcRoot string,
+	imports map[string]string,
+	subrepo string,
+	module string,
+	includeTests bool,
+	w io.Writer,
+) error {
 	// Discover all Go files in the module
 	goFiles := map[string][]string{}
 	module = modulePath(module, importPath)
 
-	walkDirFunc := func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		} else if name := d.Name(); name == "testdata" {
-			return filepath.SkipDir // Don't descend into testdata
-		} else if strings.HasSuffix(name, ".go") && (includeTests || !strings.HasSuffix(name, "_test.go")) {
-			dir := filepath.Dir(path)
-			goFiles[dir] = append(goFiles[dir], path)
-		}
-		return nil
+	if err := filepath.WalkDir(srcRoot, walkDirFunc(goFiles, includeTests)); err != nil {
+		return fmt.Errorf("failed to read module dir: %w", err)
 	}
-	// Check install packages first
-	for _, pkg := range installPkgs {
-		if strings.Contains(pkg, "...") {
-			pkg = strings.TrimSuffix(pkg, "...")
-			if err := filepath.WalkDir(filepath.Join(srcRoot, pkg), walkDirFunc); err != nil {
-				return fmt.Errorf("failed to read module dir: %w", err)
-			}
-		} else {
-			dir := filepath.Join(srcRoot, pkg)
-			goFiles[dir] = append(goFiles[dir], filepath.Join(srcRoot, pkg))
-		}
-	}
-	if len(installPkgs) == 0 {
-		if err := filepath.WalkDir(srcRoot, walkDirFunc); err != nil {
-			return fmt.Errorf("failed to read module dir: %w", err)
-		}
-	}
-	if importconfig != "" {
-		m, err := loadImportConfig(importconfig)
-		if err != nil {
-			return fmt.Errorf("failed to read importconfig: %w", err)
-		}
-		imports = m
-	}
+
 	pkgs := make([]*packages.Package, 0, len(goFiles))
 	for dir := range goFiles {
 		pkgDir := strings.TrimPrefix(strings.TrimPrefix(dir, srcRoot), "/")
-		pkg, err := createPackage(filepath.Join(importPath, pkgDir), dir, subrepo, module)
+
+		bpkg, err := buildPackage(filepath.Join(importPath, pkgDir), dir)
 		if _, ok := err.(*build.NoGoError); ok {
-			continue // Don't really care, this happens sometimes for modules
+			// This can happen if, for example, the package only contains files with
+			// leading underscores. Ignoring these is consistent with go list behaviour.
+			continue
 		} else if err != nil {
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
+
+		pkg := fromBuildPackage(bpkg, subrepo, module)
 		if subrepo != "" {
 			_, pkgPath, ok := strings.Cut(imports[pkg.PkgPath], pkg.PkgPath)
 			if !ok {
@@ -80,27 +61,7 @@ func WritePackageInfo(importPath string, srcRoot, importconfig string, imports m
 		}
 		pkgs = append(pkgs, pkg)
 	}
-	// If we're doing the stdlib, limit it to just things in the importconfig (i.e. no cmd/ packages)
-	if importconfig != "" {
-		pkgs = slices.DeleteFunc(pkgs, func(pkg *packages.Package) bool {
-			_, present := imports[pkg.PkgPath]
-			return !present
-		})
-	}
-	// Vendor packages. They aren't identified by the original imports but we know what they are now.
-	vendorised := map[string]*packages.Package{}
-	for _, pkg := range pkgs {
-		if strings.HasPrefix(pkg.PkgPath, "vendor/") {
-			vendorised[strings.TrimPrefix(pkg.PkgPath, "vendor/")] = pkg
-		}
-	}
-	for _, pkg := range pkgs {
-		for k := range pkg.Imports {
-			if v, present := vendorised[k]; present {
-				pkg.Imports[k] = v
-			}
-		}
-	}
+
 	// Ensure output is deterministic
 	sort.Slice(pkgs, func(i, j int) bool {
 		return pkgs[i].ID < pkgs[j].ID
@@ -110,7 +71,24 @@ func WritePackageInfo(importPath string, srcRoot, importconfig string, imports m
 	return e.Encode(pkgs)
 }
 
-func createPackage(pkgPath, pkgDir, subrepo, module string) (*packages.Package, error) {
+func walkDirFunc(goFiles map[string][]string, includeTests bool) func(string, fs.DirEntry, error) error {
+	return func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		} else if name := d.Name(); name == "testdata" {
+			return filepath.SkipDir // Don't descend into testdata
+		} else if strings.HasSuffix(name, ".go") && (includeTests || !strings.HasSuffix(name, "_test.go")) {
+			dir := filepath.Dir(path)
+			goFiles[dir] = append(goFiles[dir], path)
+		}
+		return nil
+	}
+}
+
+func buildPackage(
+	pkgPath string,
+	pkgDir string,
+) (*build.Package, error) {
 	if pkgDir == "" || pkgDir == "." {
 		// This happens when we're in the repo root, ImportDir refuses to read it for some reason.
 		path, err := filepath.Abs(pkgDir)
@@ -124,11 +102,15 @@ func createPackage(pkgPath, pkgDir, subrepo, module string) (*packages.Package, 
 		return nil, err
 	}
 	bpkg.ImportPath = pkgPath
-	return FromBuildPackage(bpkg, subrepo, module), nil
+	return bpkg, nil
 }
 
-// FromBuildPackage creates a packages Package from a build Package.
-func FromBuildPackage(pkg *build.Package, subrepo, module string) *packages.Package {
+// fromBuildPackage creates a [packages.Package] from a [build.Package].
+func fromBuildPackage(
+	pkg *build.Package,
+	subrepo string,
+	module string,
+) *packages.Package {
 	goFiles := slices.Concat(pkg.GoFiles, pkg.TestGoFiles, pkg.XTestGoFiles)
 	imports := slices.Concat(pkg.Imports, pkg.TestImports, pkg.XTestImports)
 	name := pkg.Name
@@ -173,26 +155,6 @@ func mappend(s []string, args ...[]string) []string {
 		s = append(s, arg...)
 	}
 	return s
-}
-
-// loadImportConfig reads the given importconfig file and produces a map of package name -> export path
-func loadImportConfig(filename string) (map[string]string, error) {
-	b, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(string(b), "\n")
-	m := make(map[string]string, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(line, "packagefile ") {
-			pkg, exportFile, found := strings.Cut(strings.TrimPrefix(line, "packagefile "), "=")
-			if !found {
-				return nil, fmt.Errorf("unknown syntax for line: %s", line)
-			}
-			m[pkg] = exportFile
-		}
-	}
-	return m, nil
 }
 
 // modulePath returns the import path for a module, or the given one if the module isn't set.
