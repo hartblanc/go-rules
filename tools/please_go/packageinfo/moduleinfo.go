@@ -126,8 +126,8 @@ func loadImportConfig(filename string) (map[string]string, error) {
 	lines := strings.Split(string(b), "\n")
 	m := make(map[string]string, len(lines))
 	for _, line := range lines {
-		if strings.HasPrefix(line, "packagefile ") {
-			pkg, exportFile, found := strings.Cut(strings.TrimPrefix(line, "packagefile "), "=")
+		if after, ok := strings.CutPrefix(line, "packagefile "); ok {
+			pkg, exportFile, found := strings.Cut(after, "=")
 			if !found {
 				return nil, fmt.Errorf("unknown syntax for line: %s", line)
 			}
