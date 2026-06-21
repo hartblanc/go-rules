@@ -107,6 +107,9 @@ func FromModuleBuildPackage(
 
 	imports := make(map[string]*packages.Package, len(bpkg.Imports))
 	for _, imp := range bpkg.Imports {
+		if imp == "C" {
+			continue
+		}
 		imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
 	}
 

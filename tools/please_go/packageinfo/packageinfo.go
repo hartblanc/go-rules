@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -48,7 +52,10 @@ func WritePackageInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkg := fromBuildPackage(bpkg, subrepo, module)
+		pkg, err := fromBuildPackage(bpkg, subrepo, module)
+		if err != nil {
+			return fmt.Errorf("building packages.Package from build.Package: %w", err)
+		}
 		if subrepo != "" {
 			// The export file in plz-out/gen is located at {subrepo}/{relative package path}/{import_file}.a
 			// We can get the relative package path by trimming the module prefix.
@@ -106,15 +113,31 @@ func buildPackage(
 	return bpkg, nil
 }
 
+func importsFromFile(filePath string) ([]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filePath, nil, parser.ImportsOnly)
+	if err != nil {
+		return nil, err
+	}
+	var imports []string
+	for _, imp := range f.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			return nil, err
+		}
+		imports = append(imports, path)
+	}
+	return imports, nil
+}
+
 // fromBuildPackage creates a [packages.Package] from a [build.Package].
 func fromBuildPackage(
 	bpkg *build.Package,
 	subrepo string,
 	module string,
-) *packages.Package {
-
-	goFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
-	compiledGoFiles := make([]string, len(goFiles))
+) (*packages.Package, error) {
+	compiledGoFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
+	goFiles := slices.Concat(compiledGoFiles, bpkg.CgoFiles)
 	for i, file := range goFiles {
 		if subrepo != "" {
 			// this is fairly nasty... there must be a better way of getting it without the pkg/ prefix
@@ -126,12 +149,28 @@ func fromBuildPackage(
 		}
 		compiledGoFiles[i] = filepath.Join(bpkg.Dir, file) // Stash this here for later
 	}
+
 	imports := make(
 		map[string]*packages.Package,
 		len(bpkg.Imports)+len(bpkg.TestImports)+len(bpkg.XTestImports),
 	)
 	for _, imp := range slices.Concat(bpkg.Imports, bpkg.TestImports, bpkg.XTestImports) {
+		if imp == "C" {
+			continue
+		}
 		imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+	}
+
+	cgoTypes := filepath.Join(bpkg.Dir, "_cgo_gotypes.go")
+	if _, err := os.Stat(cgoTypes); err == nil {
+		compiledGoFiles = append(compiledGoFiles, cgoTypes)
+		cgoTypesImports, err := importsFromFile(cgoTypes)
+		if err != nil {
+			return nil, fmt.Errorf("adding cgo types imports to packages.Package: %w", err)
+		}
+		for _, imp := range cgoTypesImports {
+			imports[imp] = &packages.Package{}
+		}
 	}
 
 	name := bpkg.Name
@@ -152,7 +191,8 @@ func fromBuildPackage(
 		EmbedPatterns:   bpkg.EmbedPatterns,
 		Imports:         imports,
 	}
-	return pkg
+
+	return pkg, nil
 }
 
 // modulePath returns the import path for a module, or the given one if the module isn't set.
