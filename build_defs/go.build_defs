@@ -997,6 +997,7 @@ def go_benchmark(name:str, srcs:list, resources:list=None, data:list|dict=None, 
         _link_extra = False,
         complete = False,
         _generate_import_config=False,
+        _generate_pkg_info=False,
         import_path=test_package,
     )
     import_config = build_rule(
@@ -1038,6 +1039,7 @@ def go_benchmark(name:str, srcs:list, resources:list=None, data:list|dict=None, 
         srcs=[main_rule],
         deps=deps,
         _generate_import_config=False,
+        _generate_pkg_info=False,
         labels = labels,
         test_only = test_only,
         import_path="main",
@@ -1046,6 +1048,10 @@ def go_benchmark(name:str, srcs:list, resources:list=None, data:list|dict=None, 
         'go': lib_rule,
     }
     if CONFIG.GO.PKG_INFO:
+        pkg_info_deps = []
+        if not external:
+            pkg_info_deps += [f":_{name}#lib_pkg_srcs"]
+
         pkg_info = _go_pkg_info(
             name = name,
             srcs = srcs + (resources or []),
@@ -1053,6 +1059,7 @@ def go_benchmark(name:str, srcs:list, resources:list=None, data:list|dict=None, 
             test_only = True,
             visibility = visibility,
             importconfig = import_config,
+            deps=pkg_info_deps,
         )
         deps += [pkg_info]
         provides["pkg_info"] = pkg_info
