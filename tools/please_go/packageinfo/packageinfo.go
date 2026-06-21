@@ -50,12 +50,13 @@ func WritePackageInfo(
 
 		pkg := fromBuildPackage(bpkg, subrepo, module)
 		if subrepo != "" {
-			_, pkgPath, ok := strings.Cut(exportFile, pkg.PkgPath)
-			if !ok {
-				return fmt.Errorf("Cannot determine export file path for package %s from %s", pkg.PkgPath, exportFile)
-			}
+			// The export file in plz-out/gen is located at {subrepo}/{relative package path}/{import_file}.a
+			// We can get the relative package path by trimming the module prefix.
+			relPath := strings.TrimPrefix(pkg.PkgPath, module)
+			relPath = strings.TrimPrefix(relPath, "/")
+
 			// This is a really gross hack to sneak both paths through the one field.
-			pkg.ExportFile = filepath.Join(subrepo, pkgPath) + "|" + exportFile
+			pkg.ExportFile = filepath.Join(subrepo, relPath, filepath.Base(exportFile)) + "|" + exportFile
 		} else {
 			pkg.ExportFile = exportFile
 		}
