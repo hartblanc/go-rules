@@ -1,7 +1,6 @@
 package packages
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -235,11 +234,39 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		return []*packages.Package{}, nil
 	}
 
-	// Pipes for whatinputs -> [deps, filter]
+	//                      [ files (slice) ]
+	//                               │
+	//                               ▼  (strings.NewReader)
+	//                      ┌─────────────────┐
+	//                      │   whatinputs    │
+	//                      └────────┬────────┘
+	//                               │
+	//                               │ (Stdout)
+	//                               ▼
+	//               =====[ FAN-OUT / MULTI-WRITER ]=====
+	//                 /                              \
+	//                / (Piped to Stdin)               \ (Piped to Stdin)
+	//               ▼                                  ▼
+	//        ┌─────────────┐                    ┌─────────────┐
+	//        │    deps     │───────────────────►│   filter    │
+	//        └─────────────┘     (Stdout to     └──────┬──────┘
+	//                             filterInR)           │
+	//                                                  │ (Stdout to
+	//                                                  │  buildInR)
+	//                                                  ▼
+	//                                           ┌─────────────┐
+	//                                           │    build    │
+	//                                           └──────┬──────┘
+	//                                                  │
+	//                                                  ▼ (Stdout)
+	//                                         [ &bytes.Buffer{} ]
+
+	// Pipes for whatinputs -> Fan-out
 	whatinputsR, whatinputsW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+	// Destination pipes for the Fan-out
 	depsInR, depsInW, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -249,39 +276,42 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		return nil, err
 	}
 
-	// Pipes for [deps, filter] -> build
+	// Pipe for deps -> filter
 	depsOutR, depsOutW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+
+	// Pipe for filter -> build
 	filterOutR, filterOutW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	buildInR, buildInW, err := os.Pipe()
-	if err != nil {
-		return nil, err
-	}
+
+	// --- COMMAND DEFINITIONS ---
 
 	whatinputs := plz("query", "whatinputs", "--ignore_unknown", "--hidden", "-")
 	whatinputs.Stdin = strings.NewReader(strings.Join(files, "\n"))
 	whatinputs.Stdout = whatinputsW
 
-	args := []string{"-", "--hidden", "-i", "go_pkg_info", "-i", "go_src"}
-	if (mode & packages.NeedExportFile) != 0 {
-		args = append(args, "-i", "go")
-	}
-	deps := plz(append([]string{"query", "deps"}, args...)...)
+	deps := plz("query", "deps", "-", "--hidden")
 	deps.Stdin = depsInR
-	deps.Stdout = depsOutW
+	deps.Stdout = depsOutW // Goes to depsOutR, which we'll feed to filterInW
 
-	filter := plz(append([]string{"query", "filter"}, args...)...)
+	filterArgs := []string{"query", "filter", "-", "--hidden", "-i", "go_pkg_info", "-i", "go_src"}
+	if (mode & packages.NeedExportFile) != 0 {
+		filterArgs = append(filterArgs, "-i", "go")
+	}
+	filter := plz(filterArgs...)
 	filter.Stdin = filterInR
 	filter.Stdout = filterOutW
 
 	build := plz("build", "-")
-	build.Stdin = buildInR
-	build.Stdout = &bytes.Buffer{}
+	build.Stdin = filterOutR // Directly takes filter's output
+	var buildStdout bytes.Buffer
+	build.Stdout = &buildStdout
+
+	// --- START PROCESSES ---
 
 	if err := whatinputs.Start(); err != nil {
 		return nil, err
@@ -293,33 +323,30 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		return nil, err
 	}
 
-	// Duplicate whatinputs output to deps and filter
+	// --- ROUTING ---
+
+	// Fan-out whatinputs output to both deps and filter
+	// We need a separate pipe writer for whatinputs' share to filter because
+	// filterInW will also be receiving data from deps later.
+	filterWhatInputsR, filterWhatInputsW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+
 	go func() {
 		defer depsInW.Close()
-		defer filterInW.Close()
-		io.Copy(io.MultiWriter(depsInW, filterInW), whatinputsR)
+		defer filterWhatInputsW.Close()
+		io.Copy(io.MultiWriter(depsInW, filterWhatInputsW), whatinputsR)
 	}()
 
-	// Merge deps and filter outputs to build input
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	wg.Add(2)
-	copyLines := func(r io.Reader) {
-		defer wg.Done()
-		scanner := bufio.NewScanner(r)
-		for scanner.Scan() {
-			mu.Lock()
-			buildInW.Write(scanner.Bytes())
-			buildInW.Write([]byte{'\n'})
-			mu.Unlock()
-		}
-	}
-	go copyLines(depsOutR)
-	go copyLines(filterOutR)
+	// Combine both inputs (from whatinputs fan-out AND from deps) into filterInW
 	go func() {
-		wg.Wait()
-		buildInW.Close()
+		defer filterInW.Close()
+		//io.Copy will read everything from the fan-out first, then everything from deps
+		_, _ = io.Copy(filterInW, io.MultiReader(filterWhatInputsR, depsOutR))
 	}()
+
+	// --- WAIT AND CLOSE ---
 
 	log.Debug("Waiting for plz query whatinputs...")
 	if err := whatinputs.Wait(); err != nil {
@@ -331,13 +358,13 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 	if err := deps.Wait(); err != nil {
 		return nil, handleSubprocessErr(deps, err)
 	}
-	depsOutW.Close()
+	depsOutW.Close() // This unblocks the MultiReader reading depsOutR, allowing filterInW to close
 
 	log.Debug("Waiting for plz query filter...")
 	if err := filter.Wait(); err != nil {
 		return nil, handleSubprocessErr(filter, err)
 	}
-	filterOutW.Close()
+	filterOutW.Close() // This signals EOF to build
 
 	log.Debug("Waiting for plz build...")
 	if err := build.Wait(); err != nil {
@@ -345,14 +372,14 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 	}
 
 	whatinputsR.Close()
+	filterWhatInputsR.Close()
 	depsInR.Close()
 	filterInR.Close()
 	depsOutR.Close()
 	filterOutR.Close()
-	buildInR.Close()
 
-	// Now we can read all the package info files from the build process' stdout.
-	return loadPackageInfoFiles(strings.Fields(strings.TrimSpace(build.Stdout.(*bytes.Buffer).String())))
+	// Now read the package info from the captured stdout buffer
+	return loadPackageInfoFiles(strings.Fields(strings.TrimSpace(buildStdout.String())))
 }
 
 // loadPackageInfoFiles loads the given set of package info files
