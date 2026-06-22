@@ -1,6 +1,7 @@
 package packages
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -319,6 +320,11 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		return nil, err
 	}
 
+	buildInR, buildInW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+
 	// --- COMMAND DEFINITIONS ---
 
 	whatinputs := plz("query", "whatinputs", "--ignore_unknown", "--hidden", "-")
@@ -338,7 +344,7 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 	filter.Stdout = filterOutW
 
 	build := plz("build", "-")
-	build.Stdin = filterOutR // Directly takes filter's output
+	build.Stdin = buildInR
 	var buildStdout bytes.Buffer
 	build.Stdout = &buildStdout
 
@@ -377,6 +383,18 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		_, _ = io.Copy(filterInW, io.MultiReader(filterWhatInputsR, depsOutR))
 	}()
 
+	// Filter targets ending with _embedcfg before they are fed to build
+	go func() {
+		defer buildInW.Close()
+		scanner := bufio.NewScanner(filterOutR)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasSuffix(line, "_embedcfg") {
+				fmt.Fprintln(buildInW, line)
+			}
+		}
+	}()
+
 	// --- WAIT AND CLOSE ---
 
 	log.Debug("Waiting for plz query whatinputs...")
@@ -408,6 +426,7 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 	filterInR.Close()
 	depsOutR.Close()
 	filterOutR.Close()
+	buildInR.Close()
 
 	// Now read the package info from the captured stdout buffer
 	return loadPackageInfoFiles(strings.Fields(strings.TrimSpace(buildStdout.String())))

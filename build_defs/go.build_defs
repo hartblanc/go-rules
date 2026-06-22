@@ -493,7 +493,7 @@ def go_library(name:str, srcs:list, resources:list=[], asm_srcs:list=None, hdrs:
     if _generate_pkg_info:
         pkg_info = _go_pkg_info(
             name = name,
-            srcs = srcs + resources,
+            srcs = srcs,
             import_path = import_path,
             subrepo = _subrepo,
             module = _module,
@@ -865,7 +865,7 @@ def go_test(name:str, srcs:list, resources:list=None, data:list|dict=None, deps:
 
         pkg_info = _go_pkg_info(
             name = name,
-            srcs = srcs + (resources or []),
+            srcs = srcs,
             package = test_package,
             test_only = True,
             visibility = visibility,
@@ -1054,7 +1054,7 @@ def go_benchmark(name:str, srcs:list, resources:list=None, data:list|dict=None, 
 
         pkg_info = _go_pkg_info(
             name = name,
-            srcs = srcs + (resources or []),
+            srcs = srcs,
             package = test_package,
             test_only = True,
             visibility = visibility,
