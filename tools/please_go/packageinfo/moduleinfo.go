@@ -95,26 +95,26 @@ func WriteModuleInfo(
 
 // FromModuleBuildPackage creates a [packages.Package] from a [build.Package] for a module.
 func FromModuleBuildPackage(
-	pkg *build.Package,
+	bpkg *build.Package,
 ) *packages.Package {
-	p := &packages.Package{
-		ID:              pkg.ImportPath,
-		Name:            pkg.Name,
-		PkgPath:         pkg.ImportPath,
-		GoFiles:         make([]string, len(pkg.GoFiles)),
-		CompiledGoFiles: make([]string, len(pkg.GoFiles)),
-		OtherFiles:      mappend(pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles, pkg.SFiles, pkg.SwigFiles, pkg.SwigCXXFiles, pkg.SysoFiles),
-		EmbedPatterns:   pkg.EmbedPatterns,
-		Imports:         make(map[string]*packages.Package, len(pkg.Imports)),
+	pkg := &packages.Package{
+		ID:              bpkg.ImportPath,
+		Name:            bpkg.Name,
+		PkgPath:         bpkg.ImportPath,
+		GoFiles:         make([]string, len(bpkg.GoFiles)),
+		CompiledGoFiles: make([]string, len(bpkg.GoFiles)),
+		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),
+		EmbedPatterns:   bpkg.EmbedPatterns,
+		Imports:         make(map[string]*packages.Package, len(bpkg.Imports)),
 	}
-	for i, file := range pkg.GoFiles {
-		p.GoFiles[i] = filepath.Join(pkg.Dir, file)
-		p.CompiledGoFiles[i] = filepath.Join(pkg.Dir, file)
+	for i, file := range bpkg.GoFiles {
+		pkg.GoFiles[i] = filepath.Join(bpkg.Dir, file)
+		pkg.CompiledGoFiles[i] = filepath.Join(bpkg.Dir, file)
 	}
-	for _, imp := range pkg.Imports {
-		p.Imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+	for _, imp := range bpkg.Imports {
+		pkg.Imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
 	}
-	return p
+	return pkg
 }
 
 // loadImportConfig reads the given importconfig file and produces a map of package name -> export path
