@@ -707,6 +707,7 @@ def go_binary(name:str, srcs:list=[], resources:list=None, asm_srcs:list=[], out
         requires=['go'],
         provides={
             'go': lib,
+            'go_src': f":_{name}#lib_srcs",
         },
         pre_build=_collect_linker_flags(static, definitions, strip=strip),
         stamp = stamp,
@@ -858,6 +859,10 @@ def go_test(name:str, srcs:list, resources:list=None, data:list|dict=None, deps:
         'go': lib_rule,
     }
     if CONFIG.GO.PKG_INFO:
+        pkg_info_deps = []
+        if not external:
+            pkg_info_deps += [f":_{name}#lib_pkg_srcs"]
+
         pkg_info = _go_pkg_info(
             name = name,
             srcs = srcs + (resources or []),
@@ -865,6 +870,7 @@ def go_test(name:str, srcs:list, resources:list=None, data:list|dict=None, deps:
             test_only = True,
             visibility = visibility,
             importconfig = import_config,
+            deps=pkg_info_deps,
         )
         deps += [pkg_info]
         provides["pkg_info"] = pkg_info
@@ -1654,7 +1660,8 @@ def _go_modinfo(name:str, test_only:bool=False, deps:list):
 
 
 def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, import_path:str="", package:str="",
-                 module:str="", subrepo:str="", test_only:bool=False, install:list=[], large_package:bool=False):
+                 module:str="", subrepo:str="", test_only:bool=False, install:list=[], large_package:bool=False,
+                 deps:list=[]):
     """Internal-only function for generating the pkg_info files"""
     install_flags = ""
     for i in install:
@@ -1697,6 +1704,8 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
         test_only = test_only,
         visibility=visibility,
         src_list_files=large_package,
+        deps=deps,
+        requires=["go_src"],
     )
 
 
