@@ -29,6 +29,7 @@ func WritePackageInfo(
 	subrepo string,
 	module string,
 	includeTests bool,
+	target string,
 	w io.Writer,
 ) error {
 	// Discover all Go files in the module
@@ -52,7 +53,7 @@ func WritePackageInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkg, err := fromBuildPackage(bpkg, subrepo, module)
+		pkg, err := fromBuildPackage(bpkg, subrepo, module, target)
 		if err != nil {
 			return fmt.Errorf("building packages.Package from build.Package: %w", err)
 		}
@@ -135,6 +136,7 @@ func fromBuildPackage(
 	bpkg *build.Package,
 	subrepo string,
 	module string,
+	target string,
 ) (*packages.Package, error) {
 	compiledGoFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
 	goFiles := slices.Concat(compiledGoFiles, bpkg.CgoFiles)
@@ -158,7 +160,7 @@ func fromBuildPackage(
 		if imp == "C" {
 			continue
 		}
-		imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+		imports[imp] = &packages.Package{}
 	}
 
 	cgoTypes := filepath.Join(bpkg.Dir, "_cgo_gotypes.go")
@@ -174,17 +176,15 @@ func fromBuildPackage(
 	}
 
 	name := bpkg.Name
-	id := bpkg.ImportPath
 	if len(bpkg.XTestGoFiles) > 0 || len(bpkg.XTestImports) > 0 {
 		// In please we may have an external test target and an internal test within the same please package.
 		// To ensure they have different go package import paths we appending to the name and id.
 		name += "_test"
-		id += "_test"
 	}
 	pkg := &packages.Package{
-		ID:              id,
+		ID:              target,
 		Name:            name,
-		PkgPath:         id,
+		PkgPath:         bpkg.ImportPath,
 		GoFiles:         goFiles,
 		CompiledGoFiles: compiledGoFiles,
 		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),

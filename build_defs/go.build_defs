@@ -197,6 +197,13 @@ def go_stdlib(name:str, tags:list=CONFIG.GO.BUILD_TAGS, labels:list=[], visibili
     if CONFIG.GO.RACE:
         suffix += '_race'
         flags += ' -race'
+    curr_subrepo = subrepo_name()
+    pkg = package_name()
+    if curr_subrepo:
+        target = f"///{curr_subrepo}//{pkg}:{name}"
+    else:
+        target = f"//{pkg}:{name}"
+
     # We have to take some care to compile this in our working directory and not try to install
     # it to the existing GOROOT, which might not be writable.
     cmds = [
@@ -206,7 +213,7 @@ def go_stdlib(name:str, tags:list=CONFIG.GO.BUILD_TAGS, labels:list=[], visibili
         "rm -rf pkg/tool pkg/include",
         "mv pkg $OUTS_PKG",
         f'find "$OUTS_PKG" -name "*.a" | sed -e "s=^$OUTS_PKG/{CONFIG.OS}_{CONFIG.ARCH}{suffix}/==" | sed -e s="\.a$"== | xargs -I{{}} echo "packagefile {{}}="$PKG_DIR/$OUTS_PKG"/{CONFIG.OS}_{CONFIG.ARCH}{suffix}/{{}}.a" | sort -u > $OUTS_IC',
-        '$TOOLS_PLZGO m -m "" --srcs "$SRCS" --importconfig "$OUTS_IC" > $OUTS_PKG_INFO',
+        f'$TOOLS_PLZGO m -m "" --srcs "$SRCS" --importconfig "$OUTS_IC" --target "{target}" > $OUTS_PKG_INFO',
     ]
     cmd = " && ".join(cmds)
     return genrule(
@@ -1656,8 +1663,15 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
     for i in install:
         install_flags += f" -p {i}" if i else " -p ."
 
+    curr_subrepo = subrepo_name()
+    pkg = package_name()
+    if curr_subrepo:
+        target = f"///{curr_subrepo}//{pkg}:{name}"
+    else:
+        target = f"//{pkg}:{name}"
+
     if module and not subrepo:
-        cmd = f'$TOOL m -m {module} {install_flags}'
+        cmd = f'$TOOL m -m {module} {install_flags} --target "{target}"'
     else:
         # The import path `go tool compile` expects for a binary target (i.e. `-p main`) doesn't match what we expect in
         # the driver response i.e. the package dir. We also don't want to set the package name, as that is something
@@ -1667,7 +1681,7 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
             import_path =  _get_import_path("", "")
         else:
             import_path = _get_import_path(package, import_path)
-        cmd = f'$TOOL p -i "{import_path}" -e "$PKG_DIR/{package}.a"'
+        cmd = f'$TOOL p -i "{import_path}" -e "$PKG_DIR/{package}.a" --target "{target}"'
         if subrepo:
             cmd = f"{cmd} -s {subrepo}"
         if module:

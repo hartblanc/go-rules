@@ -134,8 +134,19 @@ func packagesToResponse(rootpath string, pkgs []*packages.Package, dirs map[stri
 	// Build the set of root packages
 	seenRoots := map[string]struct{}{}
 	roots := []string{}
+	pkgsByPath := map[string]map[string]*packages.Package{}
+	pkgIDs := []string{}
 	seenRuntime := false
 	for _, pkg := range pkgs {
+		if pkg.PkgPath == "runtime" {
+			seenRuntime = true
+		}
+		pkgIDs = append(pkgIDs, pkg.ID)
+		if len(pkgsByPath[pkg.PkgPath]) == 0 {
+			pkgsByPath[pkg.PkgPath] = make(map[string]*packages.Package)
+		}
+		target, _, _ := strings.Cut(pkg.ID, " ")
+		pkgsByPath[pkg.PkgPath][target] = pkg
 		if _, present := dirs[filepath.Dir(pkg.ExportFile)]; present {
 			seenRoots[pkg.ID] = struct{}{}
 			roots = append(roots, pkg.ID)
@@ -148,8 +159,29 @@ func packagesToResponse(rootpath string, pkgs []*packages.Package, dirs map[stri
 					roots = append(roots, pkg.ID)
 				}
 			}
-			if pkg.ID == "runtime" {
-				seenRuntime = true
+		}
+	}
+	for _, pkg := range pkgs {
+		for path := range pkg.Imports {
+			if pkgsWithPath := pkgsByPath[path]; len(pkgsWithPath) == 0 {
+				return nil, fmt.Errorf("Could not find any packages with path: %q", path)
+			} else if len(pkgsWithPath) == 1 {
+				for _, pkgWithPath := range pkgsWithPath {
+					pkg.Imports[path] = pkgWithPath
+				}
+			} else {
+				target, _, _ := strings.Cut(pkg.ID, " ")
+				depsCmd := plz("query", "deps", "--hidden", target)
+				depsCmd.Stdout = &bytes.Buffer{}
+				if err := depsCmd.Run(); err != nil {
+					return nil, fmt.Errorf("querying deps for package with ambiguous imports: %w", err)
+				}
+				deps := strings.Fields(strings.TrimSpace(depsCmd.Stdout.(*bytes.Buffer).String()))
+				for _, dep := range deps {
+					if pkgWithPath, ok := pkgsWithPath[dep]; ok {
+						pkg.Imports[path] = pkgWithPath
+					}
+				}
 			}
 		}
 	}
@@ -448,7 +480,7 @@ func loadStdlibPackages() ([]*packages.Package, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		pkgs = append(pkgs, packageinfo.FromModuleBuildPackage(pkg))
+		pkgs = append(pkgs, packageinfo.FromModuleBuildPackage(pkg, "", ""))
 	}
 	return pkgs, nil
 }

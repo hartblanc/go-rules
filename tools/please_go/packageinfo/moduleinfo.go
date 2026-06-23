@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/build"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,7 @@ func WriteModuleInfo(
 	srcRoot string,
 	importconfig string,
 	installPkgs []string,
+	target string,
 	w io.Writer,
 ) error {
 
@@ -33,7 +35,17 @@ func WriteModuleInfo(
 	for _, pkg := range installPkgs {
 		if strings.Contains(pkg, "...") {
 			pkg = strings.TrimSuffix(pkg, "...")
-			if err := filepath.WalkDir(filepath.Join(srcRoot, pkg), walkDirFunc(goFiles, false)); err != nil {
+			if err := filepath.WalkDir(filepath.Join(srcRoot, pkg), func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				} else if name := d.Name(); name == "testdata" || strings.HasPrefix(name, "_") || d.Name() == "cmd" {
+					return filepath.SkipDir // Don't descend into testdata
+				} else if strings.HasSuffix(name, ".go") {
+					dir := filepath.Dir(path)
+					goFiles[dir] = append(goFiles[dir], path)
+				}
+				return nil
+			}); err != nil {
 				return fmt.Errorf("failed to read module dir: %w", err)
 			}
 		} else {
@@ -52,7 +64,7 @@ func WriteModuleInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkgs = append(pkgs, FromModuleBuildPackage(bpkg))
+		pkgs = append(pkgs, FromModuleBuildPackage(bpkg, target, pkgDir))
 	}
 
 	imports, err := loadImportConfig(importconfig)
@@ -64,24 +76,27 @@ func WriteModuleInfo(
 		pkg.ExportFile = imports[pkg.PkgPath]
 	}
 
-	pkgs = slices.DeleteFunc(pkgs, func(pkg *packages.Package) bool {
-		_, present := imports[pkg.PkgPath]
-		return !present
-	})
-
-	// Vendor packages. They aren't identified by the original imports but we know what they are now.
-	vendorised := map[string]*packages.Package{}
+	// In the stdlib source code (and therefore in the imports reported by build.ImportDir) vendored packages
+	// are imported using the non-vendored path. However, the vendored paths are used in the importconfig +
+	// exportFile (which is used by go/packages). The packages returned must therefore have their PkgPath and
+	// Imports aligned with the exportFile. After loading all of the packages we can see which packages are vendored
+	// and replace any imports pointing to the unvendored paths to the vendored paths.
+	isVendored := make(map[string]bool)
 	for _, pkg := range pkgs {
-		if after, ok := strings.CutPrefix(pkg.PkgPath, "vendor/"); ok {
-			vendorised[after] = pkg
+		if pkgPath, ok := strings.CutPrefix(pkg.PkgPath, "vendor/"); ok {
+			isVendored[pkgPath] = true
 		}
 	}
 	for _, pkg := range pkgs {
-		for k := range pkg.Imports {
-			if v, present := vendorised[k]; present {
-				pkg.Imports[k] = v
+		newImports := make(map[string]*packages.Package, len(pkg.Imports))
+		for imp := range pkg.Imports {
+			if isVendored[imp] {
+				newImports["vendor/"+imp] = &packages.Package{}
+			} else {
+				newImports[imp] = &packages.Package{}
 			}
 		}
+		pkg.Imports = newImports
 	}
 
 	// Ensure output is deterministic
@@ -96,6 +111,8 @@ func WriteModuleInfo(
 // FromModuleBuildPackage creates a [packages.Package] from a [build.Package] for a module.
 func FromModuleBuildPackage(
 	bpkg *build.Package,
+	target string,
+	pkgDir string,
 ) *packages.Package {
 	goFiles := make([]string, len(bpkg.GoFiles))
 	compiledGoFiles := make([]string, len(bpkg.GoFiles))
@@ -110,11 +127,11 @@ func FromModuleBuildPackage(
 		if imp == "C" {
 			continue
 		}
-		imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+		imports[imp] = &packages.Package{}
 	}
 
 	pkg := &packages.Package{
-		ID:              bpkg.ImportPath,
+		ID:              target + " " + pkgDir,
 		Name:            bpkg.Name,
 		PkgPath:         bpkg.ImportPath,
 		GoFiles:         goFiles,

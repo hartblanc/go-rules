@@ -78,12 +78,14 @@ var opts = struct {
 		Subrepo      string `short:"s" long:"subrepo" description:"Subrepo root that this package is within"`
 		Module       string `long:"mod" description:"The module this is within, if present"`
 		IncludeTests bool   `short:"t" long:"include_tests" description:"Whether to include test files"`
+		Target       string `long:"target" description:"The build target of the rule being generated"`
 	} `command:"package_info" alias:"p" description:"Creates an info file about a Go package"`
 	ModuleInfo struct {
 		ModulePath   string   `short:"m" long:"module_path" required:"true" description:"Import path of the module in question"`
 		Srcs         string   `long:"srcs" env:"SRCS_SRCS" required:"true" description:"Source files of the module"`
 		ImportConfig string   `long:"importconfig" env:"SRCS_IC" description:"Importconfig file for locating gc export data"`
 		Packages     []string `short:"p" long:"packages" description:"Packages to include in the module"`
+		Target       string   `long:"target" description:"The build target of the rule being generated"`
 	} `command:"module_info" alias:"m" description:"Creates an info file about a series of packages in a go_module"`
 	Generate struct {
 		SrcRoot          string   `short:"r" long:"src_root" description:"The src root of the module to inspect"`
@@ -177,14 +179,14 @@ var subCommands = map[string]func() int{
 	},
 	"package_info": func() int {
 		pi := opts.PackageInfo
-		if err := packageinfo.WritePackageInfo(pi.ImportPath, pi.Pkg, pi.ExportFile, pi.Subrepo, pi.Module, pi.IncludeTests, os.Stdout); err != nil {
+		if err := packageinfo.WritePackageInfo(pi.ImportPath, pi.Pkg, pi.ExportFile, pi.Subrepo, pi.Module, pi.IncludeTests, pi.Target, os.Stdout); err != nil {
 			log.Fatalf("failed to write package info: %s", err)
 		}
 		return 0
 	},
 	"module_info": func() int {
 		mi := opts.ModuleInfo
-		if err := packageinfo.WriteModuleInfo(mi.ModulePath, mi.Srcs, mi.ImportConfig, mi.Packages, os.Stdout); err != nil {
+		if err := packageinfo.WriteModuleInfo(mi.ModulePath, mi.Srcs, mi.ImportConfig, mi.Packages, mi.Target, os.Stdout); err != nil {
 			log.Fatalf("failed to write module info: %s", err)
 		}
 		return 0
