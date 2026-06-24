@@ -1674,6 +1674,8 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
     for i in install:
         install_flags += f" -p {i}" if i else " -p ."
 
+    src_list_files = large_package
+
     curr_subrepo = subrepo_name()
     pkg = package_name()
     if curr_subrepo:
@@ -1692,6 +1694,7 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
             import_path =  _get_import_path("", "")
         else:
             import_path = _get_import_path(package, import_path)
+        src_list_files = True
         cmd = f'$TOOL p -i "{import_path}" -e "$PKG_DIR/{package}.a" --target "{target}"'
         if subrepo:
             cmd = f"{cmd} -s {subrepo}"
@@ -1710,7 +1713,7 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
         labels = ["go_pkg_info"],
         test_only = test_only,
         visibility=visibility,
-        src_list_files=True,
+        src_list_files=src_list_files,
         deps=deps,
         requires=["go_src"],
     )

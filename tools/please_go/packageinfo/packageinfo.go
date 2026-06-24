@@ -147,19 +147,25 @@ func fromBuildPackage(
 		// We don't rely on the way that build.ImportDir categorises the files as these rely on specific go
 		// naming conventions that please doesn't enforce. Instead, we rely on all the sources present in the
 		// build sandbox being the ones that we need to construct the package.
+
 		for _, file := range slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles) {
-			compiledGoFiles = append(compiledGoFiles, filepath.Join(bpkg.Dir, file))
+			path := filepath.Join(bpkg.Dir, file)
+			compiledGoFiles = append(compiledGoFiles, path)
 		}
 		for _, file := range slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles, bpkg.CgoFiles) {
+			if strings.HasSuffix(file, ".cgo1.go") {
+				continue
+			}
+			var path string
 			if subrepo != "" {
 				// this is fairly nasty... there must be a better way of getting it without the pkg/ prefix
 				dir := strings.TrimPrefix(bpkg.Dir, "pkg/"+runtime.GOOS+"_"+runtime.GOARCH)
 				dir = strings.TrimPrefix(strings.TrimPrefix(dir, "/"), module)
-				goFiles = append(goFiles, filepath.Join(subrepo, dir, file))
+				path = filepath.Join(subrepo, dir, file)
 			} else {
-				goFiles = append(goFiles, filepath.Join(bpkg.Dir, file))
+				path = filepath.Join(bpkg.Dir, file)
 			}
-
+			goFiles = append(goFiles, path)
 		}
 		otherFiles = append(otherFiles, slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles)...)
 		embedPatterns = append(embedPatterns, bpkg.EmbedPatterns...)

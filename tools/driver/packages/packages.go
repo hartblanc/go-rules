@@ -197,7 +197,9 @@ func packagesToResponse(rootpath string, pkgs []*packages.Package, dirs map[stri
 			// which isn't particularly clear to the build actions that generated them.
 			pkg.GoFiles[i] = findFile(rootpath, file)
 		}
-		pkg.CompiledGoFiles = pkg.GoFiles
+		for i, file := range pkg.CompiledGoFiles {
+			pkg.CompiledGoFiles[i] = findFile(rootpath, file)
+		}
 		pkg.ExportFile = filepath.Join(rootpath, pkg.ExportFile)
 		for i, file := range pkg.EmbedFiles {
 			pkg.EmbedFiles[i] = findFile(rootpath, file)
@@ -386,13 +388,13 @@ func loadPackageInfo(files []string, mode packages.LoadMode) ([]*packages.Packag
 		_, _ = io.Copy(filterInW, io.MultiReader(filterWhatInputsR, depsOutR))
 	}()
 
-	// Filter targets ending with _embedcfg before they are fed to build
+	// Filter targets ending with embedcfg before they are fed to build
 	go func() {
 		defer buildInW.Close()
 		scanner := bufio.NewScanner(filterOutR)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasSuffix(line, "_embedcfg") {
+			if !strings.HasSuffix(line, "embedcfg") {
 				fmt.Fprintln(buildInW, line)
 			}
 		}
@@ -463,7 +465,6 @@ func loadPackageInfoFiles(paths []string) ([]*packages.Package, error) {
 				// Undo the hack from packageinfo.go
 				before, _, _ := strings.Cut(pkg.ExportFile, "|")
 				pkg.ExportFile = filepath.Join("plz-out/gen", before)
-				pkg.CompiledGoFiles = pkg.GoFiles
 			}
 			lock.Lock()
 			defer lock.Unlock()

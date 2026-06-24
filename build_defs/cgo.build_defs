@@ -136,6 +136,7 @@ def cgo_library(
         deps = deps,
         hdrs = hdrs,
         _generate_import_config=False,
+        _generate_pkg_info=False,
         import_path=import_path,
         _subrepo = _subrepo,
         _module = _module,
@@ -154,6 +155,28 @@ def cgo_library(
         labels = labels,
     )
 
+    provides = {
+        'go': ':' + name,
+        'go_src': go_rule,
+        'cgo': c_rule,
+        'cc_hdrs': c_rule,
+    }
+
+    if CONFIG.GO.PKG_INFO:
+        pkg_info = _go_pkg_info(
+            name = name,
+            srcs = srcs + go_srcs + [cgo_rule + '|go'],
+            import_path = import_path,
+            subrepo = _subrepo,
+            module = _module,
+            package = package or name,
+            test_only = test_only,
+            visibility = visibility,
+            deps = [go_rule],
+        )
+        provides["pkg_info"] = pkg_info
+        deps = deps + [pkg_info]
+
     # And finally combine the compiled C code into the Go archive object so go tool link can find it later.
     return merge_cgo_obj(
         name = name,
@@ -164,12 +187,7 @@ def cgo_library(
         linker_flags = linker_flags,
         package = package,
         labels = ['link:plz-out/go/pkg/%s_%s' % (CONFIG.OS, CONFIG.ARCH)] + labels,
-        provides = {
-            'go': ':' + name,
-            'go_src': go_rule,
-            'cgo': c_rule,
-            'cc_hdrs': c_rule,
-        },
+        provides = provides,
         deps = deps,
         exported_deps=[import_config],
     )
