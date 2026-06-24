@@ -97,22 +97,28 @@ func WriteModuleInfo(
 func FromModuleBuildPackage(
 	bpkg *build.Package,
 ) *packages.Package {
+	goFiles := make([]string, len(bpkg.GoFiles))
+	compiledGoFiles := make([]string, len(bpkg.GoFiles))
+
+	for i, file := range bpkg.GoFiles {
+		goFiles[i] = filepath.Join(bpkg.Dir, file)
+		compiledGoFiles[i] = filepath.Join(bpkg.Dir, file)
+	}
+
+	imports := make(map[string]*packages.Package, len(bpkg.Imports))
+	for _, imp := range bpkg.Imports {
+		imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+	}
+
 	pkg := &packages.Package{
 		ID:              bpkg.ImportPath,
 		Name:            bpkg.Name,
 		PkgPath:         bpkg.ImportPath,
-		GoFiles:         make([]string, len(bpkg.GoFiles)),
-		CompiledGoFiles: make([]string, len(bpkg.GoFiles)),
+		GoFiles:         goFiles,
+		CompiledGoFiles: compiledGoFiles,
 		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),
 		EmbedPatterns:   bpkg.EmbedPatterns,
-		Imports:         make(map[string]*packages.Package, len(bpkg.Imports)),
-	}
-	for i, file := range bpkg.GoFiles {
-		pkg.GoFiles[i] = filepath.Join(bpkg.Dir, file)
-		pkg.CompiledGoFiles[i] = filepath.Join(bpkg.Dir, file)
-	}
-	for _, imp := range bpkg.Imports {
-		pkg.Imports[imp] = &packages.Package{ID: imp, PkgPath: imp}
+		Imports:         imports,
 	}
 	return pkg
 }
