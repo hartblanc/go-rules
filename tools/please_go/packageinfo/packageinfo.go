@@ -72,9 +72,7 @@ func walkDirFunc(goFiles map[string][]string) func(string, fs.DirEntry, error) e
 	return func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
-		} else if name := d.Name(); name == "testdata" {
-			return filepath.SkipDir // Don't descend into testdata
-		} else if strings.HasSuffix(name, ".go") {
+		} else if name := d.Name(); strings.HasSuffix(name, ".go") {
 			dir := filepath.Dir(path)
 			goFiles[dir] = append(goFiles[dir], path)
 		}
