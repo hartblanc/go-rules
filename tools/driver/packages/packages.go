@@ -163,6 +163,9 @@ func packagesToResponse(rootpath string, pkgs []*packages.Package, dirs map[stri
 	}
 	for _, pkg := range pkgs {
 		for path := range pkg.Imports {
+			if path == "C" {
+				continue
+			}
 			if pkgsWithPath := pkgsByPath[path]; len(pkgsWithPath) == 0 {
 				return nil, fmt.Errorf("Could not find any packages with path: %q", path)
 			} else if len(pkgsWithPath) == 1 {

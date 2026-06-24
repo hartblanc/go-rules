@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -31,19 +30,21 @@ func WritePackageInfo(
 	target string,
 	w io.Writer,
 ) error {
-	// Discover all Go files in the package
-	goFiles := map[string][]string{}
-	module = modulePath(module, importPath)
 
-	if err := filepath.WalkDir(srcRoot, walkDirFunc(goFiles)); err != nil {
-		return fmt.Errorf("failed to read module dir: %w", err)
+	b, err := os.ReadFile("_plz/named_srcs/srcs")
+	if err != nil {
+		return err
 	}
 
-	pkgs := make([]*packages.Package, 0, len(goFiles))
-	for dir := range goFiles {
-		pkgDir := strings.TrimPrefix(strings.TrimPrefix(dir, srcRoot), "/")
+	module = modulePath(module, importPath)
+	bpkgByDir := make(map[string]*build.Package)
+	for _, src := range strings.Fields(string(b)) {
+		dir := filepath.Dir(src)
+		if _, ok := bpkgByDir[dir]; ok {
+			continue
+		}
 
-		bpkg, err := buildPackage(filepath.Join(importPath, pkgDir), dir)
+		bpkg, err := buildPackage(importPath, dir)
 		if _, ok := err.(*build.NoGoError); ok {
 			// This can happen if, for example, the package only contains files with
 			// leading underscores. Ignoring these is consistent with go list behaviour.
@@ -51,18 +52,15 @@ func WritePackageInfo(
 		} else if err != nil {
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
+		bpkgByDir[dir] = bpkg
 
-		pkg, err := fromBuildPackage(bpkg, subrepo, module, target, exportFile, dir)
-		if err != nil {
-			return fmt.Errorf("building packages.Package from build.Package: %w", err)
-		}
-		pkgs = append(pkgs, pkg)
 	}
+	pkg, err := fromBuildPackage(bpkgByDir, subrepo, module, target, exportFile)
+	if err != nil {
+		return fmt.Errorf("building packages.Package from build.Package: %w", err)
+	}
+	pkgs := []*packages.Package{pkg}
 
-	// Ensure output is deterministic
-	sort.Slice(pkgs, func(i, j int) bool {
-		return pkgs[i].ID < pkgs[j].ID
-	})
 	e := json.NewEncoder(w)
 	e.SetIndent("", "  ")
 	return e.Encode(pkgs)
@@ -119,68 +117,82 @@ func importsFromFile(filePath string) ([]string, error) {
 
 // fromBuildPackage creates a [packages.Package] from a [build.Package].
 func fromBuildPackage(
-	bpkg *build.Package,
+	bpkgByDir map[string]*build.Package,
 	subrepo string,
 	module string,
 	target string,
 	exportFile string,
-	dir string,
 ) (*packages.Package, error) {
 
-	// We don't rely on the way that build.ImportDir categorises the files as these rely on specific go naming
-	// conventions that please doesn't enforce. Instead, we rely on all the sources present in the build sandbox
-	// being the ones that we need to construct the package.
-	compiledGoFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
-	goFiles := slices.Concat(compiledGoFiles, bpkg.CgoFiles)
-
-	// We don't rely on bpkg.Name as it doesn't account for whether the directory contains an external test package.
-	// Attempting to infer whether the pacakge name is actually '{name}_test' requires relying on go naming
-	// conventions that please does not enforce.
-	name, err := packageName(filepath.Join(dir, goFiles[0]))
-	if err != nil {
-		return nil, fmt.Errorf("getting package name from first go file: %w", err)
-	}
-
-	for i, file := range goFiles {
-		if subrepo != "" {
-			// this is fairly nasty... there must be a better way of getting it without the pkg/ prefix
-			dir := strings.TrimPrefix(bpkg.Dir, "pkg/"+runtime.GOOS+"_"+runtime.GOARCH)
-			dir = strings.TrimPrefix(strings.TrimPrefix(dir, "/"), module)
-			goFiles[i] = filepath.Join(subrepo, dir, file)
-		} else {
-			goFiles[i] = filepath.Join(bpkg.Dir, file)
-		}
-		compiledGoFiles[i] = filepath.Join(bpkg.Dir, file) // Stash this here for later
-	}
-
-	imports := make(
-		map[string]*packages.Package,
-		len(bpkg.Imports)+len(bpkg.TestImports)+len(bpkg.XTestImports),
-	)
-	for _, imp := range slices.Concat(bpkg.Imports, bpkg.TestImports, bpkg.XTestImports) {
-		if imp == "C" {
-			continue
-		}
-		imports[imp] = &packages.Package{}
-	}
-
-	cgoTypes := filepath.Join(bpkg.Dir, "_cgo_gotypes.go")
-	if _, err := os.Stat(cgoTypes); err == nil {
-		compiledGoFiles = append(compiledGoFiles, cgoTypes)
-		cgoTypesImports, err := importsFromFile(cgoTypes)
+	var name string
+	var importPath string
+	for _, bpkg := range bpkgByDir {
+		// We don't rely on bpkg.Name as it doesn't account for whether the directory contains an external test package.
+		// Attempting to infer whether the pacakge name is actually '{name}_test' requires relying on go naming
+		// conventions that please does not enforce.
+		var err error
+		name, err = packageName(filepath.Join(bpkg.Dir, slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles, bpkg.CgoFiles)[0]))
 		if err != nil {
-			return nil, fmt.Errorf("adding cgo types imports to packages.Package: %w", err)
+			return nil, fmt.Errorf("getting package name from first go file: %w", err)
 		}
-		for _, imp := range cgoTypesImports {
+		importPath = bpkg.ImportPath
+		break
+	}
+
+	var compiledGoFiles []string
+	var goFiles []string
+	var otherFiles []string
+	var embedPatterns []string
+	for _, bpkg := range bpkgByDir {
+		// We don't rely on the way that build.ImportDir categorises the files as these rely on specific go
+		// naming conventions that please doesn't enforce. Instead, we rely on all the sources present in the
+		// build sandbox being the ones that we need to construct the package.
+		for _, file := range slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles) {
+			compiledGoFiles = append(compiledGoFiles, filepath.Join(bpkg.Dir, file))
+		}
+		for _, file := range slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles, bpkg.CgoFiles) {
+			if subrepo != "" {
+				// this is fairly nasty... there must be a better way of getting it without the pkg/ prefix
+				dir := strings.TrimPrefix(bpkg.Dir, "pkg/"+runtime.GOOS+"_"+runtime.GOARCH)
+				dir = strings.TrimPrefix(strings.TrimPrefix(dir, "/"), module)
+				goFiles = append(goFiles, filepath.Join(subrepo, dir, file))
+			} else {
+				goFiles = append(goFiles, filepath.Join(bpkg.Dir, file))
+			}
+
+		}
+		otherFiles = append(otherFiles, slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles)...)
+		embedPatterns = append(embedPatterns, bpkg.EmbedPatterns...)
+	}
+
+	imports := make(map[string]*packages.Package)
+	for _, bpkg := range bpkgByDir {
+		for _, imp := range slices.Concat(bpkg.Imports, bpkg.TestImports, bpkg.XTestImports) {
+			if imp == "C" {
+				continue
+			}
 			imports[imp] = &packages.Package{}
 		}
 	}
 
-	pkgPath := bpkg.ImportPath
+	for _, bpkg := range bpkgByDir {
+		cgoTypes := filepath.Join(bpkg.Dir, "_cgo_gotypes.go")
+		if _, err := os.Stat(cgoTypes); err == nil {
+			compiledGoFiles = append(compiledGoFiles, cgoTypes)
+			cgoTypesImports, err := importsFromFile(cgoTypes)
+			if err != nil {
+				return nil, fmt.Errorf("adding cgo types imports to packages.Package: %w", err)
+			}
+			for _, imp := range cgoTypesImports {
+				imports[imp] = &packages.Package{}
+			}
+		}
+	}
+
 	if subrepo != "" {
 		// The export file in plz-out/gen is located at {subrepo}/{relative package path}/{import_file}.a
 		// We can get the relative package path by trimming the module prefix.
-		relPath := strings.TrimPrefix(pkgPath, module)
+		relPath := strings.TrimPrefix(importPath, module)
 		relPath = strings.TrimPrefix(relPath, "/")
 
 		// This is a really gross hack to sneak both paths through the one field.
@@ -190,11 +202,11 @@ func fromBuildPackage(
 	pkg := &packages.Package{
 		ID:              target,
 		Name:            name,
-		PkgPath:         bpkg.ImportPath,
+		PkgPath:         importPath,
 		GoFiles:         goFiles,
 		CompiledGoFiles: compiledGoFiles,
-		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),
-		EmbedPatterns:   bpkg.EmbedPatterns,
+		OtherFiles:      otherFiles,
+		EmbedPatterns:   embedPatterns,
 		Imports:         imports,
 		ExportFile:      exportFile,
 	}

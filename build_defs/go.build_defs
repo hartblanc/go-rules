@@ -1710,7 +1710,7 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
         labels = ["go_pkg_info"],
         test_only = test_only,
         visibility=visibility,
-        src_list_files=large_package,
+        src_list_files=True,
         deps=deps,
         requires=["go_src"],
     )
