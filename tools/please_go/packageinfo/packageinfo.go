@@ -28,15 +28,14 @@ func WritePackageInfo(
 	exportFile string,
 	subrepo string,
 	module string,
-	includeTests bool,
 	target string,
 	w io.Writer,
 ) error {
-	// Discover all Go files in the module
+	// Discover all Go files in the package
 	goFiles := map[string][]string{}
 	module = modulePath(module, importPath)
 
-	if err := filepath.WalkDir(srcRoot, walkDirFunc(goFiles, includeTests)); err != nil {
+	if err := filepath.WalkDir(srcRoot, walkDirFunc(goFiles)); err != nil {
 		return fmt.Errorf("failed to read module dir: %w", err)
 	}
 
@@ -53,7 +52,7 @@ func WritePackageInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkg, err := fromBuildPackage(bpkg, subrepo, module, target, exportFile)
+		pkg, err := fromBuildPackage(bpkg, subrepo, module, target, exportFile, dir)
 		if err != nil {
 			return fmt.Errorf("building packages.Package from build.Package: %w", err)
 		}
@@ -69,13 +68,13 @@ func WritePackageInfo(
 	return e.Encode(pkgs)
 }
 
-func walkDirFunc(goFiles map[string][]string, includeTests bool) func(string, fs.DirEntry, error) error {
+func walkDirFunc(goFiles map[string][]string) func(string, fs.DirEntry, error) error {
 	return func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		} else if name := d.Name(); name == "testdata" {
 			return filepath.SkipDir // Don't descend into testdata
-		} else if strings.HasSuffix(name, ".go") && (includeTests || !strings.HasSuffix(name, "_test.go")) {
+		} else if strings.HasSuffix(name, ".go") {
 			dir := filepath.Dir(path)
 			goFiles[dir] = append(goFiles[dir], path)
 		}
@@ -127,9 +126,23 @@ func fromBuildPackage(
 	module string,
 	target string,
 	exportFile string,
+	dir string,
 ) (*packages.Package, error) {
+
+	// We don't rely on the way that build.ImportDir categorises the files as these rely on specific go naming
+	// conventions that please doesn't enforce. Instead, we rely on all the sources present in the build sandbox
+	// being the ones that we need to construct the package.
 	compiledGoFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
 	goFiles := slices.Concat(compiledGoFiles, bpkg.CgoFiles)
+
+	// We don't rely on bpkg.Name as it doesn't account for whether the directory contains an external test package.
+	// Attempting to infer whether the pacakge name is actually '{name}_test' requires relying on go naming
+	// conventions that please does not enforce.
+	name, err := packageName(filepath.Join(dir, goFiles[0]))
+	if err != nil {
+		return nil, fmt.Errorf("getting package name from first go file: %w", err)
+	}
+
 	for i, file := range goFiles {
 		if subrepo != "" {
 			// this is fairly nasty... there must be a better way of getting it without the pkg/ prefix
@@ -176,12 +189,6 @@ func fromBuildPackage(
 		exportFile = filepath.Join(subrepo, relPath, filepath.Base(exportFile)) + "|" + exportFile
 	}
 
-	name := bpkg.Name
-	if len(bpkg.XTestGoFiles) > 0 || len(bpkg.XTestImports) > 0 {
-		// In please we may have an external test target and an internal test within the same please package.
-		// To ensure they have different go package import paths we appending to the name and id.
-		name += "_test"
-	}
 	pkg := &packages.Package{
 		ID:              target,
 		Name:            name,
@@ -204,4 +211,13 @@ func modulePath(module, importPath string) string {
 	}
 	before, _, _ := strings.Cut(module, "@")
 	return before
+}
+
+func packageName(filePath string) (string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filePath, nil, parser.PackageClauseOnly)
+	if err != nil {
+		return "", err
+	}
+	return f.Name.Name, nil
 }

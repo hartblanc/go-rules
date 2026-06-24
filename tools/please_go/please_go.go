@@ -72,13 +72,12 @@ var opts = struct {
 		} `positional-args:"true"`
 	} `command:"embed" alias:"e" description:"Generate embed config for a set of Go source files"`
 	PackageInfo struct {
-		ImportPath   string `short:"i" long:"import_path" description:"Go import path (e.g. github.com/please-build/go-rules)"`
-		Pkg          string `long:"pkg" env:"PKG_DIR" description:"Package that we're in within the repo"`
-		ExportFile   string `short:"e" long:"export_file" description:"Path to the export file"`
-		Subrepo      string `short:"s" long:"subrepo" description:"Subrepo root that this package is within"`
-		Module       string `long:"mod" description:"The module this is within, if present"`
-		IncludeTests bool   `short:"t" long:"include_tests" description:"Whether to include test files"`
-		Target       string `long:"target" description:"The build target of the rule being generated"`
+		ImportPath string `short:"i" long:"import_path" description:"Go import path (e.g. github.com/please-build/go-rules)"`
+		Pkg        string `long:"pkg" env:"PKG_DIR" description:"Package that we're in within the repo"`
+		ExportFile string `short:"e" long:"export_file" description:"Path to the export file"`
+		Subrepo    string `short:"s" long:"subrepo" description:"Subrepo root that this package is within"`
+		Module     string `long:"mod" description:"The module this is within, if present"`
+		Target     string `long:"target" description:"The build target of the rule being generated"`
 	} `command:"package_info" alias:"p" description:"Creates an info file about a Go package"`
 	ModuleInfo struct {
 		ModulePath   string   `short:"m" long:"module_path" required:"true" description:"Import path of the module in question"`
@@ -179,7 +178,7 @@ var subCommands = map[string]func() int{
 	},
 	"package_info": func() int {
 		pi := opts.PackageInfo
-		if err := packageinfo.WritePackageInfo(pi.ImportPath, pi.Pkg, pi.ExportFile, pi.Subrepo, pi.Module, pi.IncludeTests, pi.Target, os.Stdout); err != nil {
+		if err := packageinfo.WritePackageInfo(pi.ImportPath, pi.Pkg, pi.ExportFile, pi.Subrepo, pi.Module, pi.Target, os.Stdout); err != nil {
 			log.Fatalf("failed to write package info: %s", err)
 		}
 		return 0
