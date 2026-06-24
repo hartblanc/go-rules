@@ -1667,7 +1667,7 @@ def _go_pkg_info(name:str, srcs:list, visibility:list, importconfig:str=None, im
             import_path =  _get_import_path("", "")
         else:
             import_path = _get_import_path(package, import_path)
-        cmd = f'$TOOL p -i "{import_path}" -m "{import_path}:$PKG_DIR/{package}.a"'
+        cmd = f'$TOOL p -i "{import_path}" -e "$PKG_DIR/{package}.a"'
         if subrepo:
             cmd = f"{cmd} -s {subrepo}"
         if module:

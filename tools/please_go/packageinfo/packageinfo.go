@@ -21,7 +21,7 @@ import (
 func WritePackageInfo(
 	importPath string,
 	srcRoot string,
-	imports map[string]string,
+	exportFile string,
 	subrepo string,
 	module string,
 	includeTests bool,
@@ -50,14 +50,14 @@ func WritePackageInfo(
 
 		pkg := fromBuildPackage(bpkg, subrepo, module)
 		if subrepo != "" {
-			_, pkgPath, ok := strings.Cut(imports[pkg.PkgPath], pkg.PkgPath)
+			_, pkgPath, ok := strings.Cut(exportFile, pkg.PkgPath)
 			if !ok {
-				return fmt.Errorf("Cannot determine export file path for package %s from %s", pkg.PkgPath, imports[pkg.PkgPath])
+				return fmt.Errorf("Cannot determine export file path for package %s from %s", pkg.PkgPath, exportFile)
 			}
 			// This is a really gross hack to sneak both paths through the one field.
-			pkg.ExportFile = filepath.Join(subrepo, pkgPath) + "|" + imports[pkg.PkgPath]
+			pkg.ExportFile = filepath.Join(subrepo, pkgPath) + "|" + exportFile
 		} else {
-			pkg.ExportFile = imports[pkg.PkgPath]
+			pkg.ExportFile = exportFile
 		}
 		pkgs = append(pkgs, pkg)
 	}
