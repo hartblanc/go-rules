@@ -53,20 +53,9 @@ func WritePackageInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkg, err := fromBuildPackage(bpkg, subrepo, module, target)
+		pkg, err := fromBuildPackage(bpkg, subrepo, module, target, exportFile)
 		if err != nil {
 			return fmt.Errorf("building packages.Package from build.Package: %w", err)
-		}
-		if subrepo != "" {
-			// The export file in plz-out/gen is located at {subrepo}/{relative package path}/{import_file}.a
-			// We can get the relative package path by trimming the module prefix.
-			relPath := strings.TrimPrefix(pkg.PkgPath, module)
-			relPath = strings.TrimPrefix(relPath, "/")
-
-			// This is a really gross hack to sneak both paths through the one field.
-			pkg.ExportFile = filepath.Join(subrepo, relPath, filepath.Base(exportFile)) + "|" + exportFile
-		} else {
-			pkg.ExportFile = exportFile
 		}
 		pkgs = append(pkgs, pkg)
 	}
@@ -137,6 +126,7 @@ func fromBuildPackage(
 	subrepo string,
 	module string,
 	target string,
+	exportFile string,
 ) (*packages.Package, error) {
 	compiledGoFiles := slices.Concat(bpkg.GoFiles, bpkg.TestGoFiles, bpkg.XTestGoFiles)
 	goFiles := slices.Concat(compiledGoFiles, bpkg.CgoFiles)
@@ -175,6 +165,17 @@ func fromBuildPackage(
 		}
 	}
 
+	pkgPath := bpkg.ImportPath
+	if subrepo != "" {
+		// The export file in plz-out/gen is located at {subrepo}/{relative package path}/{import_file}.a
+		// We can get the relative package path by trimming the module prefix.
+		relPath := strings.TrimPrefix(pkgPath, module)
+		relPath = strings.TrimPrefix(relPath, "/")
+
+		// This is a really gross hack to sneak both paths through the one field.
+		exportFile = filepath.Join(subrepo, relPath, filepath.Base(exportFile)) + "|" + exportFile
+	}
+
 	name := bpkg.Name
 	if len(bpkg.XTestGoFiles) > 0 || len(bpkg.XTestImports) > 0 {
 		// In please we may have an external test target and an internal test within the same please package.
@@ -190,6 +191,7 @@ func fromBuildPackage(
 		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),
 		EmbedPatterns:   bpkg.EmbedPatterns,
 		Imports:         imports,
+		ExportFile:      exportFile,
 	}
 
 	return pkg, nil

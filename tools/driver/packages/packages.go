@@ -15,11 +15,10 @@ import (
 	"sync"
 
 	"github.com/peterebden/go-cli-init/v5/logging"
+	"github.com/please-build/go-rules/tools/please_go/packageinfo"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 	"golang.org/x/tools/go/packages"
-
-	"github.com/please-build/go-rules/tools/please_go/packageinfo"
 )
 
 var log = logging.MustGetLogger()
@@ -480,7 +479,7 @@ func loadStdlibPackages() ([]*packages.Package, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		pkgs = append(pkgs, packageinfo.FromModuleBuildPackage(pkg, "", ""))
+		pkgs = append(pkgs, packageinfo.FromModuleBuildPackage(pkg, "", "", nil))
 	}
 	return pkgs, nil
 }

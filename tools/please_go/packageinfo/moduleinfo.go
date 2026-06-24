@@ -55,6 +55,10 @@ func WriteModuleInfo(
 	}
 
 	var pkgs []*packages.Package
+	exportFileByPkgPath, err := loadImportConfig(importconfig)
+	if err != nil {
+		return fmt.Errorf("failed to read importconfig: %w", err)
+	}
 	for dir := range goFiles {
 		pkgDir := strings.TrimPrefix(strings.TrimPrefix(dir, srcRoot), "/")
 		bpkg, err := buildPackage(filepath.Join(modulePath, pkgDir), dir)
@@ -64,16 +68,7 @@ func WriteModuleInfo(
 			return fmt.Errorf("failed to import directory %s: %w", dir, err)
 		}
 
-		pkgs = append(pkgs, FromModuleBuildPackage(bpkg, target, pkgDir))
-	}
-
-	imports, err := loadImportConfig(importconfig)
-	if err != nil {
-		return fmt.Errorf("failed to read importconfig: %w", err)
-	}
-
-	for _, pkg := range pkgs {
-		pkg.ExportFile = imports[pkg.PkgPath]
+		pkgs = append(pkgs, FromModuleBuildPackage(bpkg, target, pkgDir, exportFileByPkgPath))
 	}
 
 	// In the stdlib source code (and therefore in the imports reported by build.ImportDir) vendored packages
@@ -113,6 +108,7 @@ func FromModuleBuildPackage(
 	bpkg *build.Package,
 	target string,
 	pkgDir string,
+	exportFileByPackagePath map[string]string,
 ) *packages.Package {
 	goFiles := make([]string, len(bpkg.GoFiles))
 	compiledGoFiles := make([]string, len(bpkg.GoFiles))
@@ -139,6 +135,7 @@ func FromModuleBuildPackage(
 		OtherFiles:      slices.Concat(bpkg.CFiles, bpkg.CXXFiles, bpkg.MFiles, bpkg.HFiles, bpkg.SFiles, bpkg.SwigFiles, bpkg.SwigCXXFiles, bpkg.SysoFiles),
 		EmbedPatterns:   bpkg.EmbedPatterns,
 		Imports:         imports,
+		ExportFile:      exportFileByPackagePath[bpkg.ImportPath],
 	}
 	return pkg
 }
